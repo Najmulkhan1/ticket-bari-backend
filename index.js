@@ -11,7 +11,7 @@ const { MongoClient, ServerApiVersion } = require('mongodb');
 app.use(cors());
 app.use(express.json());
 
-const port = process.env.PORT || 5000;
+const port = process.env.PORT || 3000;
 
 
 const uri = process.env.MONGODB_URI;
@@ -28,6 +28,39 @@ const client = new MongoClient(uri, {
 const run = async () => {
     try{
         await client.connect();
+
+        const db = client.db("ticket-bari");
+        const usersCollection = db.collection("users")
+        const ticketsCollection = db.collection('tickets')
+
+        // user related api
+    
+        app.post('/users', async(req, res) => {
+            const user = req.body
+            user.role = 'user'
+            user.createdAt = new Date()
+
+            const email = user.email
+            const userExist = await usersCollection.findOne({email})
+            if(userExist){
+                return res.send({message: 'User already exists'})
+            }
+
+            const result = await usersCollection.insertOne(user)
+            res.send(result)
+        })
+
+        // ticket related api
+        app.post('/tickets', async(req, res) => {
+            const ticket = req.body
+            ticket.createdAt = new Date()
+            ticket.status = 'pending'
+
+            const result = await ticketsCollection.insertOne(ticket)
+            res.send(result)
+        })
+
+
 
         await client.db("admin").command({ping: 1});
         console.log("MongoDB connected");
