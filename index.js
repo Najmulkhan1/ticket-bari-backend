@@ -51,6 +51,11 @@ const run = async () => {
         })
 
         // ticket related api
+
+        app.get('/tickets', async(req,res) => {
+            const result = await ticketsCollection.find().toArray()
+            res.send(result)
+        })
         app.post('/tickets', async(req, res) => {
             const ticket = req.body
             ticket.createdAt = new Date()
