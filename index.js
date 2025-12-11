@@ -82,8 +82,7 @@ const run = async () => {
             res.send(result)
         })
 
-        
-
+        // booking related api
         app.get('/my-bookings', async (req, res) => {
             const email = req.query.email
 
@@ -104,8 +103,6 @@ const run = async () => {
             res.send(result)
         })
 
-
-       
 
         app.post('/bookings', async (req, res) => {
             const booking = req.body
@@ -137,16 +134,14 @@ const run = async () => {
         })
 
 
-
-
-
-
-
-
-        app.get('/bookings', async (req, res) => {
-            const result = await bookingsCollection.find().toArray()
+        app.get('/vendor/bookings-request', async (req, res) => {
+            const vendorEmail = req.query.vendorEmail
+            const query = { vendorEmail: vendorEmail }
+            const result = await bookingsCollection.find(query).toArray()
             res.send(result)
         })
+
+        
 
 
 
