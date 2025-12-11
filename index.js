@@ -56,6 +56,14 @@ const run = async () => {
             const result = await ticketsCollection.find().toArray()
             res.send(result)
         })
+
+        app.get('/tickets/:id', async(req,res) => {
+            const id = req.params.id
+            const query = {_id: new ObjectId(id)}
+            const result = await ticketsCollection.findOne(query)
+            res.send(result)
+        })
+
         app.post('/tickets', async(req, res) => {
             const ticket = req.body
             ticket.createdAt = new Date()
