@@ -5,6 +5,7 @@ const dotenv = require("dotenv"); // dotenv
 dotenv.config();
 // mongodb connection
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 
 // middleware
@@ -88,15 +89,17 @@ const run = async () => {
 
 
             const pipeLine = [
-                {$match: {email}},
-                {$addFields: {ticketId: {$toObjectId: '$ticketId'}}},
-                {$lookup: {
-                    from: 'tickets',
-                    localField: 'ticketId',
-                    foreignField: '_id',
-                    as: 'ticket'
-                }},
-                {$unwind: {path: '$ticket', preserveNullAndEmptyArrays: true}}
+                { $match: { email } },
+                { $addFields: { ticketId: { $toObjectId: '$ticketId' } } },
+                {
+                    $lookup: {
+                        from: 'tickets',
+                        localField: 'ticketId',
+                        foreignField: '_id',
+                        as: 'ticket'
+                    }
+                },
+                { $unwind: { path: '$ticket', preserveNullAndEmptyArrays: true } }
             ]
 
             const result = await bookingsCollection.aggregate(pipeLine).toArray()
@@ -106,46 +109,93 @@ const run = async () => {
 
         app.post('/bookings', async (req, res) => {
             const booking = req.body
-            const ticketId = booking.ticketId
-            const qtyToBook = parseInt(booking.quantity)
-
-            const updatedTicket = await ticketsCollection.findOneAndUpdate(
-                {
-                    _id: new ObjectId(ticketId),
-                    quantity: { $gte: qtyToBook }
-                },
-                {
-                    $inc: { quantity: -qtyToBook }
-                },
-                {
-                    returnDocument: 'after'
-                }
-            )
-
-            if (!updatedTicket) {
-                return res.status(400).send({
-                    error: "Not enough seats available!"
-                });
-            }
-
             booking.createdAt = new Date()
+            // const ticketId = booking.ticketId
+            // const qtyToBook = parseInt(booking.quantity)
+
+            // const updatedTicket = await ticketsCollection.findOneAndUpdate(
+            //     {
+            //         _id: new ObjectId(ticketId),
+            //         quantity: { $gte: qtyToBook }
+            //     },
+            //     {
+            //         $inc: { quantity: -qtyToBook }
+            //     },
+            //     {
+            //         returnDocument: 'after'
+            //     }
+            // )
+
+            // if (!updatedTicket) {
+            //     return res.status(400).send({
+            //         error: "Not enough seats available!"
+            //     });
+            // }
+
             const result = await bookingsCollection.insertOne(booking)
             res.send({ message: 'Booking successful', result })
         })
 
-
-        app.get('/vendor/bookings-request', async (req, res) => {
-            const vendorEmail = req.query.vendorEmail
-            const query = { vendorEmail: vendorEmail }
-            const result = await bookingsCollection.find(query).toArray()
+        app.patch('/bookings/:id', async (req, res) => {
+            const id = req.params.id
+            const updatedBooking = req.body
+            const query = { _id: new ObjectId(id) }
+            const result = await bookingsCollection.updateOne(query, { $set: updatedBooking })
             res.send(result)
         })
 
-        
+        app.get('/vendor/bookings-request', async (req, res) => {
+            const vendorEmail = req.query.vendorEmail
+
+            const pipeLine = [
+                { $match: { vendorEmail } },
+                { $addFields: { ticketId: { $toObjectId: '$ticketId' } } },
+                {
+                    $lookup: {
+                        from: 'tickets',
+                        localField: 'ticketId',
+                        foreignField: '_id',
+                        as: 'ticket'
+                    }
+                },
+                { $unwind: { path: '$ticket', preserveNullAndEmptyArrays: true } }
+            ]
+            const result = await bookingsCollection.aggregate(pipeLine).toArray()
+            res.send(result)
+        })
 
 
+        // payment related api
+        app.post('/create-checkout-session', async (req, res) => {
+            const paymentInfo = req.body
+            const session = await stripe.checkout.sessions.create({
+                line_items: [
+                    {
+                        // Provide the exact Price ID (for example, price_1234) of the product you want to sell
+                        price_data:{
+                            currency: 'USD',
+                            product_data: {
+                                name: `Please pay for: ${paymentInfo.title}`,
+                                
+                            },
+                            unit_amount: paymentInfo.amount * 100
+                        },
+                        quantity: 1,
+                    },
+                ],
+                mode: 'payment',
+                metadata: {
+                    bookingId: paymentInfo.bookingId,
+                },
+                customer_email: paymentInfo.email,
+                success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success`,
+                cancel_url: `${process.env.SITE_DOMAIN}/dashboard/payment-failed`,
+            });
 
+            res.send({ url: session.url });
+        });
 
+       
 
 
 
