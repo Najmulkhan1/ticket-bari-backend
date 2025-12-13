@@ -13,6 +13,13 @@ app.use(cors());
 app.use(express.json());
 
 const port = process.env.PORT || 3000;
+const crypto = require('crypto');
+
+function generateTicketId() {
+    const timestamp = Date.now();
+    const random = crypto.randomBytes(3).toString('hex').toUpperCase();
+    return `TCK-${timestamp}-${random}`;
+}
 
 
 const uri = process.env.MONGODB_URI;
@@ -34,6 +41,7 @@ const run = async () => {
         const usersCollection = db.collection("users")
         const ticketsCollection = db.collection('tickets')
         const bookingsCollection = db.collection('bookings')
+        const paymentsCollection = db.collection('payments')
 
         // user related api
 
@@ -113,24 +121,28 @@ const run = async () => {
             // const ticketId = booking.ticketId
             // const qtyToBook = parseInt(booking.quantity)
 
-            // const updatedTicket = await ticketsCollection.findOneAndUpdate(
-            //     {
-            //         _id: new ObjectId(ticketId),
-            //         quantity: { $gte: qtyToBook }
-            //     },
-            //     {
-            //         $inc: { quantity: -qtyToBook }
-            //     },
-            //     {
-            //         returnDocument: 'after'
-            //     }
-            // )
+            // if (booking.status === 'paid') {
+            //     const updatedTicket = await ticketsCollection.findOneAndUpdate(
+            //         {
+            //             _id: new ObjectId(ticketId),
+            //             quantity: { $gte: qtyToBook }
+            //         },
+            //         {
+            //             $inc: { quantity: -qtyToBook }
+            //         },
+            //         {
+            //             returnDocument: 'after'
+            //         }
+            //     )
 
-            // if (!updatedTicket) {
-            //     return res.status(400).send({
-            //         error: "Not enough seats available!"
-            //     });
+            //     if (!updatedTicket) {
+            //         return res.status(400).send({
+            //             error: "Not enough seats available!"
+            //         });
+            //     }
+
             // }
+
 
             const result = await bookingsCollection.insertOne(booking)
             res.send({ message: 'Booking successful', result })
@@ -172,11 +184,11 @@ const run = async () => {
                 line_items: [
                     {
                         // Provide the exact Price ID (for example, price_1234) of the product you want to sell
-                        price_data:{
+                        price_data: {
                             currency: 'USD',
                             product_data: {
                                 name: `Please pay for: ${paymentInfo.title}`,
-                                
+
                             },
                             unit_amount: paymentInfo.amount * 100
                         },
@@ -186,16 +198,106 @@ const run = async () => {
                 mode: 'payment',
                 metadata: {
                     bookingId: paymentInfo.bookingId,
+                    bookingTitle: paymentInfo.title,
+                    ticketId: paymentInfo.ticketId,
+                    quantity: paymentInfo.quantity?.toString(),
                 },
                 customer_email: paymentInfo.email,
-                success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success`,
+                success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success?session_id={CHECKOUT_SESSION_ID}`,
                 cancel_url: `${process.env.SITE_DOMAIN}/dashboard/payment-failed`,
             });
 
             res.send({ url: session.url });
         });
 
-       
+
+        app.patch('/payment-success', async (req, res) => {
+            try {
+                const session_id = req.query.session_id;
+                const session = await stripe.checkout.sessions.retrieve(session_id);
+
+                
+                const trakingId = generateTicketId();
+
+                if (session.payment_status === 'paid') {
+                    const bookingId = session.metadata.bookingId;
+                    const query = {
+                        _id: new ObjectId(bookingId),
+                        status: { $ne: 'paid' } 
+                    };
+
+                    const updateBooking = {
+                        $set: {
+                            status: 'paid',
+                            paymentId: session.id,
+                            trakingId: trakingId 
+                        }
+                    };
+
+                    const bookingResult = await bookingsCollection.updateOne(query, updateBooking);
+
+                    
+                    if (bookingResult.modifiedCount === 0) {
+                        
+                        const existingBooking = await bookingsCollection.findOne({ _id: new ObjectId(bookingId) });
+
+                        return res.send({
+                            success: true,
+                            message: "Already paid",
+                            transactionId: session.payment_intent,
+                            trakingId: existingBooking?.trakingId 
+                        });
+                    }
+                    
+
+                    const ticketId = session.metadata.ticketId;
+                    const qtyToBook = parseInt(session.metadata.quantity);
+
+                    const updatedTicket = await ticketsCollection.findOneAndUpdate(
+                        {
+                            _id: new ObjectId(ticketId),
+                            quantity: { $gte: qtyToBook }
+                        },
+                        {
+                            $inc: { quantity: -qtyToBook }
+                        },
+                        {
+                            returnDocument: 'after'
+                        }
+                    );
+
+                    const payment = {
+                        amount: session.amount_total / 100,
+                        customer_email: session.customer_email,
+                        bookingId: session.metadata.bookingId,
+                        ticketId: ticketId,
+                        ticketTitle: session.metadata.bookingTitle,
+                        transactionId: session.payment_intent,
+                        paymentStatus: session.payment_status,
+                        paidAt: new Date(),
+                    }
+
+                    const paymentResult = await paymentsCollection.insertOne(payment);
+
+                    return res.send({
+                        bookingResult,
+                        updatedTicket,
+                        trakingId: trakingId, 
+                        paymentResult,
+                        transactionId: session.payment_intent,
+                        success: true
+                    });
+                }
+
+                return res.send({ success: false });
+
+            } catch (error) {
+                console.error(error);
+                res.status(500).send({ message: "Internal Server Error" });
+            }
+        });
+
+
 
 
 
