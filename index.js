@@ -108,11 +108,55 @@ const run = async () => {
             res.send(result)
         })
 
+        app.patch('/users/fraud/:id', async (req, res) => {
+            const id = req.params.id
+            const query = {_id: new ObjectId(id)}
+
+            const user = await usersCollection.findOne(query)
+            if(!user){
+                return res.status(404).send({message: 'User not found'})
+            }
+
+
+            const updateRole = {
+                $set: {
+                    role: 'fraud'
+                }
+            }
+
+            const updateUserResult = await usersCollection.updateOne(query, updateRole)
+            
+
+            const deleteTicketsResult = await ticketsCollection.deleteMany({email: user.email}) //or use vendor id 
+
+            res.send({updateUserResult, deleteTicketsResult})
+        })
+
 
         // ticket related api
 
+        // admin show all tickets
         app.get('/tickets', async (req, res) => {
-            const result = await ticketsCollection.find().toArray()
+
+            const search = req.query.search
+            const query = {}
+
+            if (search) {
+                query.$or = [
+                    { title: { $regex: search, $options: 'i' } },
+                    { email: { $regex: search, $options: 'i' } },
+                ]
+            }
+
+            const result = await ticketsCollection.find(query).sort({ createdAt: -1 }).toArray()
+            res.send(result)
+        })
+
+        app.get('/all-tickets', async (req, res) => {
+
+            const query = {status: 'approved'}
+
+            const result = await ticketsCollection.find(query).toArray()
             res.send(result)
         })
 
@@ -128,8 +172,23 @@ const run = async () => {
             const ticket = req.body
             ticket.createdAt = new Date()
             ticket.status = 'pending'
+            // const email = req.decoded.email  //verify token 
+            const email = ticket.email
 
+            const user = await usersCollection.findOne({email: email})
+            if(user?.role === 'fraud'){
+                return res.status(403).send({message: 'You are not allowed to create a ticket'})
+            }
+            
             const result = await ticketsCollection.insertOne(ticket)
+            res.send(result)
+        })
+
+        app.patch('/tickets/status/:id', async (req, res) => {
+            const id = req.params.id
+            const updatedTicket = req.body
+            const query = { _id: new ObjectId(id) }
+            const result = await ticketsCollection.updateOne(query, { $set: updatedTicket })
             res.send(result)
         })
 
