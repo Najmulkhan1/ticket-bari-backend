@@ -22,6 +22,29 @@ function generateTicketId() {
 }
 
 
+// authentication
+const verifyFBToken = async(req, res, next) => {
+    const token = req.headers.authorization;
+
+    if(!token){
+        return res.status(401).send({message: 'Unauthorized'})
+    }
+
+    try {
+        const idToken = token.split(' ')[1]
+        const decoded = await admin.auth().verifyIdToken(idToken)
+        console.log('decoded in the token', decoded);
+
+        req.decoded = decoded.email
+        next()
+        
+        
+    } catch (error) {
+        return res.status(401).send({message: 'Unauthorized'})
+    }
+}
+
+
 const uri = process.env.MONGODB_URI;
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(uri, {
@@ -45,6 +68,23 @@ const run = async () => {
 
         // user related api
 
+        app.get('/users', async(req,res) => {
+            const search = req.query.search
+            const query = {}
+
+            if (search) {
+                query.$or = [
+                    { displayName: { $regex: search, $options: 'i' } },
+                    { email: { $regex: search, $options: 'i' } },
+                ]
+            }
+
+            const cursor = usersCollection.find(query).sort({ createdAt: -1 })
+            const result = await cursor.toArray()
+            res.send(result)
+            
+        })
+
         app.post('/users', async (req, res) => {
             const user = req.body
             user.role = 'user'
@@ -59,6 +99,15 @@ const run = async () => {
             const result = await usersCollection.insertOne(user)
             res.send(result)
         })
+
+        app.patch('/users/role/:id', async (req, res) => {
+            const id = req.params.id
+            const updatedUser = req.body
+            const query = { _id: new ObjectId(id) }
+            const result = await usersCollection.updateOne(query, { $set: updatedUser })
+            res.send(result)
+        })
+
 
         // ticket related api
 
@@ -98,6 +147,7 @@ const run = async () => {
 
             const pipeLine = [
                 { $match: { email } },
+                
                 { $addFields: { ticketId: { $toObjectId: '$ticketId' } } },
                 {
                     $lookup: {
@@ -107,12 +157,17 @@ const run = async () => {
                         as: 'ticket'
                     }
                 },
-                { $unwind: { path: '$ticket', preserveNullAndEmptyArrays: true } }
+                { $unwind: { path: '$ticket', preserveNullAndEmptyArrays: true } },
+
+                
             ]
 
             const result = await bookingsCollection.aggregate(pipeLine).toArray()
             res.send(result)
         })
+
+
+        
 
 
         app.post('/bookings', async (req, res) => {
@@ -170,7 +225,8 @@ const run = async () => {
                         as: 'ticket'
                     }
                 },
-                { $unwind: { path: '$ticket', preserveNullAndEmptyArrays: true } }
+                { $unwind: { path: '$ticket', preserveNullAndEmptyArrays: true } },
+                { $sort: { createdAt: -1 } }
             ]
             const result = await bookingsCollection.aggregate(pipeLine).toArray()
             res.send(result)
@@ -216,39 +272,39 @@ const run = async () => {
                 const session_id = req.query.session_id;
                 const session = await stripe.checkout.sessions.retrieve(session_id);
 
-                
+
                 const trakingId = generateTicketId();
 
                 if (session.payment_status === 'paid') {
                     const bookingId = session.metadata.bookingId;
                     const query = {
                         _id: new ObjectId(bookingId),
-                        status: { $ne: 'paid' } 
+                        status: { $ne: 'paid' }
                     };
 
                     const updateBooking = {
                         $set: {
                             status: 'paid',
                             paymentId: session.id,
-                            trakingId: trakingId 
+                            trakingId: trakingId
                         }
                     };
 
                     const bookingResult = await bookingsCollection.updateOne(query, updateBooking);
 
-                    
+
                     if (bookingResult.modifiedCount === 0) {
-                        
+
                         const existingBooking = await bookingsCollection.findOne({ _id: new ObjectId(bookingId) });
 
                         return res.send({
                             success: true,
                             message: "Already paid",
                             transactionId: session.payment_intent,
-                            trakingId: existingBooking?.trakingId 
+                            trakingId: existingBooking?.trakingId
                         });
                     }
-                    
+
 
                     const ticketId = session.metadata.ticketId;
                     const qtyToBook = parseInt(session.metadata.quantity);
@@ -282,7 +338,7 @@ const run = async () => {
                     return res.send({
                         bookingResult,
                         updatedTicket,
-                        trakingId: trakingId, 
+                        trakingId: trakingId,
                         paymentResult,
                         transactionId: session.payment_intent,
                         success: true
@@ -296,6 +352,19 @@ const run = async () => {
                 res.status(500).send({ message: "Internal Server Error" });
             }
         });
+
+
+        // payment transaction api
+
+        app.get('/payment-transaction', async (req, res) => {
+            const email = req.query.email;
+            console.log(email);
+
+            const query = { customer_email: email };
+            const result = await paymentsCollection.find(query).sort({ paidAt: -1 }).toArray();
+            res.send(result);
+        });
+
 
 
 
